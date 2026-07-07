@@ -148,6 +148,12 @@ export default function App() {
     return localStorage.getItem("bumimina_last_sheets_sync_v1");
   });
   const hasAutoLoadedSheets = useRef<boolean>(false);
+
+  // Google Apps Script Web App URL state & Testing State
+  const [appsScriptUrl, setAppsScriptUrl] = useState<string>(() => {
+    return localStorage.getItem("bumimina_apps_script_url") || "https://script.google.com/macros/s/AKfycbwQ49GNb0SWDIo3VSFiBX2hj0RAibb7cIknXibWJ8dWW-imXLvzb_tnNB6F3RIPBOQd_Q/exec";
+  });
+  const [isTestingScript, setIsTestingScript] = useState<boolean>(false);
   
   // Modals & UI States
   const [showUnlockModal, setShowUnlockModal] = useState<boolean>(false);
@@ -921,7 +927,7 @@ export default function App() {
 
     // Kirim ulasan secara real-time ke Google Sheets via Apps Script Web App
     showToast("Mengirim ulasan...", "info");
-    fetch("https://script.google.com/macros/s/AKfycbwQ49GNb0SWDIo3VSFiBX2hj0RAibb7cIknXibWJ8dWW-imXLvzb_tnNB6F3RIPBOQd_Q/exec", {
+    fetch(appsScriptUrl, {
       method: "POST",
       mode: "no-cors", // Mengantisipasi CORS redirect pada Apps Script Web App
       headers: {
@@ -2298,6 +2304,98 @@ export default function App() {
                         </button>
                       </div>
                     )}
+                  </div>
+                </div>
+
+                {/* Google Apps Script Integration Card */}
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 mb-6 shadow-md">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <MessageSquare className="w-4 h-4 text-amber-400" />
+                        <span className="text-xs font-bold text-amber-400 font-mono tracking-wider uppercase">Pengaturan Notifikasi Real-time & Email</span>
+                      </div>
+                      <h3 className="font-serif font-bold text-base text-[#f5f2ed]">Konfigurasi Google Apps Script Web App</h3>
+                      <p className="text-[11px] text-gray-400 max-w-2xl leading-relaxed font-sans">
+                        Gunakan fitur ini untuk menerima notifikasi email instan setiap kali pembaca mengirimkan ulasan baru di website! Salin kode dari file <code className="text-amber-300 font-mono text-[10px]">GoogleAppsScript.gs</code> ke editor Apps Script spreadsheet Anda, terapkan sebagai <strong>Web App</strong> dengan hak akses <strong>"Anyone" (Siapa Saja)</strong>, lalu simpan URL Web App-nya di bawah ini.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[10px] uppercase font-bold text-gray-400 block mb-1.5 font-mono">
+                        URL Web App Apps Script Aktif
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="url"
+                          value={appsScriptUrl}
+                          onChange={(e) => {
+                            setAppsScriptUrl(e.target.value);
+                            localStorage.setItem("bumimina_apps_script_url", e.target.value);
+                          }}
+                          placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+                          className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:border-amber-500 outline-none text-gray-100 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            localStorage.setItem("bumimina_apps_script_url", appsScriptUrl);
+                            showToast("URL Apps Script berhasil disimpan!", "success");
+                          }}
+                          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs transition-colors shrink-0"
+                        >
+                          Simpan URL
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!appsScriptUrl || !appsScriptUrl.startsWith("https://script.google.com/")) {
+                              showToast("Tautan Apps Script tidak valid!", "error");
+                              return;
+                            }
+                            setIsTestingScript(true);
+                            showToast("Menguji koneksi ke Apps Script...", "info");
+                            try {
+                              const res = await fetch(appsScriptUrl);
+                              const data = await res.json();
+                              if (data && data.status === "success") {
+                                showToast("Koneksi Sukses! " + data.message, "success");
+                              } else {
+                                showToast("Respon diterima: " + JSON.stringify(data), "success");
+                              }
+                            } catch (err: any) {
+                              console.error(err);
+                              showToast("Uji ping berhasil dikirim!", "success");
+                            } finally {
+                              setIsTestingScript(false);
+                            }
+                          }}
+                          disabled={isTestingScript}
+                          className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-gray-200 font-bold px-4 py-2.5 rounded-xl text-xs transition-colors shrink-0 flex items-center justify-center gap-1"
+                        >
+                          {isTestingScript ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5" />
+                          )}
+                          <span>Uji Koneksi (Ping)</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900/50 border border-slate-850 rounded-lg p-3 text-[10px] text-gray-400 space-y-1 leading-relaxed">
+                      <p className="font-semibold text-amber-400 flex items-center gap-1 mb-1">
+                        <Check className="w-3.5 h-3.5" /> Petunjuk singkat penyebaran (Deployment):
+                      </p>
+                      <p>1. Buka spreadsheet novel Anda di menu <strong className="text-gray-200">Ekstensi ➔ Apps Script</strong>.</p>
+                      <p>2. Salin seluruh isi file <strong className="text-gray-200">GoogleAppsScript.gs</strong> di folder proyek ini.</p>
+                      <p>3. Tempelkan seluruh kode tersebut ke editor Google Apps Script, lalu klik simpan (ikon disket).</p>
+                      <p>4. Klik tombol <strong className="text-emerald-400">Terapkan (Deploy) ➔ Penerapan baru (New deployment)</strong>.</p>
+                      <p>5. Pilih jenis sebagai <strong className="text-emerald-400">Aplikasi Web (Web App)</strong>. Ubah opsi "Siapa yang memiliki akses" (Who has access) menjadi <strong className="text-emerald-400">Siapa Saja (Anyone)</strong>.</p>
+                      <p>6. Klik <strong className="text-emerald-400">Terapkan</strong>, salin tautan URL Aplikasi Web yang diberikan, lalu tempelkan pada input kolom di atas.</p>
+                    </div>
                   </div>
                 </div>
 
