@@ -1,0 +1,6 @@
+{
+  "name": "Bumi Mina",
+  "description": "Sebuah aplikasi web novel eksklusif yang mengisahkan perjalanan spiritual ibadah Haji ke Tanah Suci Mekah.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
