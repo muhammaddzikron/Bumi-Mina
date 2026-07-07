@@ -20,8 +20,7 @@ let cachedAccessToken: string | null = null;
 // Try to restore token from localStorage on module load
 try {
   const token = localStorage.getItem(STORAGE_TOKEN_KEY);
-  const expiry = localStorage.getItem(STORAGE_TOKEN_EXPIRY_KEY);
-  if (token && expiry && Date.now() < parseInt(expiry)) {
+  if (token) {
     cachedAccessToken = token;
   }
 } catch (e) {
@@ -36,15 +35,10 @@ export const initAuth = (
   return onAuthStateChanged(auth, async (user) => {
     if (user) {
       const token = cachedAccessToken || localStorage.getItem(STORAGE_TOKEN_KEY);
-      const expiry = localStorage.getItem(STORAGE_TOKEN_EXPIRY_KEY);
-      const isValid = token && expiry && Date.now() < parseInt(expiry);
-
-      if (isValid) {
+      if (token) {
         cachedAccessToken = token;
-        if (onAuthSuccess) onAuthSuccess(user, token!);
+        if (onAuthSuccess) onAuthSuccess(user, token);
       } else {
-        // Token expired or not found, but we still have a user.
-        // We will call onAuthFailure to prompt the user to re-link when they try to sync
         if (onAuthFailure) onAuthFailure();
       }
     } else {
@@ -100,6 +94,9 @@ async function ensureSheetsExist(accessToken: string): Promise<void> {
   });
 
   if (!res.ok) {
+    if (res.status === 401) {
+      throw new Error('TOKEN_EXPIRED');
+    }
     const errText = await res.text();
     throw new Error(`Gagal memuat metadata spreadsheet: ${errText}`);
   }
@@ -228,6 +225,9 @@ export async function exportToGoogleSheets(
   });
 
   if (!writeRes.ok) {
+    if (writeRes.status === 401) {
+      throw new Error('TOKEN_EXPIRED');
+    }
     const errText = await writeRes.text();
     throw new Error(`Gagal mengunggah data ke Google Sheets: ${errText}`);
   }
@@ -244,11 +244,19 @@ export async function importFromGoogleSheets(accessToken: string): Promise<{
 
   // Fetch all sheets in parallel
   const ranges = ["'Bab Novel'!A2:I1000", "'Ulasan Pembaca'!A2:F1000", "'Bookmark'!A2:B1000"];
-  const fetchPromises = ranges.map(range =>
-    fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}`, {
+  const fetchPromises = ranges.map(async range => {
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
-    }).then(res => res.json())
-  );
+    });
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error('TOKEN_EXPIRED');
+      }
+      const errText = await res.text();
+      throw new Error(`Gagal membaca data range ${range}: ${errText}`);
+    }
+    return res.json();
+  });
 
   const [chaptersData, reviewsData, bookmarksData] = await Promise.all(fetchPromises);
 

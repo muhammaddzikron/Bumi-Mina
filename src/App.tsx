@@ -454,45 +454,122 @@ export default function App() {
   }, []);
 
   // Automatically load database from Google Sheets on startup if a token exists
+  const lastLoadedToken = useRef<string | null>(null);
   useEffect(() => {
-    if (googleToken && !hasAutoLoadedSheets.current) {
-      hasAutoLoadedSheets.current = true;
+    if (googleToken && googleToken !== lastLoadedToken.current) {
+      lastLoadedToken.current = googleToken;
       
-      const autoLoadFromSheets = async () => {
+      const autoLoadAndMergeFromSheets = async () => {
         setIsSyncingSheets(true);
         try {
+          // 1. Get latest database from Google Sheets
           const imported = await importFromGoogleSheets(googleToken);
-          if (imported.chapters && imported.chapters.length > 0) {
-            // Pastikan semua bab terimpor dikunci mulai dari Bab 1
-            const lockedChapters = imported.chapters.map(c => {
-              if (c.number >= 1) {
-                return { ...c, isLocked: true };
-              }
-              return c;
-            });
-            await saveChaptersToStorage(lockedChapters, true);
-            setReviews(imported.reviews);
-            localStorage.setItem(STORAGE_REVIEWS, JSON.stringify(imported.reviews));
-            setBookmarks(imported.bookmarks);
-            localStorage.setItem(STORAGE_BOOKMARKS, JSON.stringify(imported.bookmarks));
-            
-            // Segera sinkronkan kembali ke Google Sheets agar status kunci terbaru tersimpan
-            await exportToGoogleSheets(googleToken, lockedChapters, imported.reviews, imported.bookmarks);
-
-            const nowStr = new Date().toLocaleString("id-ID");
-            setLastSyncTime(nowStr);
-            localStorage.setItem("bumimina_last_sheets_sync_v1", nowStr);
-            showToast("Sinkronisasi Otomatis: Data novel berhasil dimuat & disinkronkan ke Google Sheets!", "success");
+          
+          // 2. Load latest local storage content to merge
+          const storedChapters = localStorage.getItem(STORAGE_CHAPTERS_KEY);
+          let localChapters: Chapter[] = [];
+          if (storedChapters) {
+            try {
+              localChapters = JSON.parse(storedChapters);
+            } catch (e) {}
           }
+          if (localChapters.length === 0) {
+            localChapters = chapters;
+          }
+
+          const storedReviews = localStorage.getItem(STORAGE_REVIEWS);
+          let localReviews: Review[] = [];
+          if (storedReviews) {
+            try {
+              localReviews = JSON.parse(storedReviews);
+            } catch (e) {}
+          }
+
+          const storedBookmarks = localStorage.getItem(STORAGE_BOOKMARKS);
+          let localBookmarks: Bookmark[] = [];
+          if (storedBookmarks) {
+            try {
+              localBookmarks = JSON.parse(storedBookmarks);
+            } catch (e) {}
+          }
+
+          // 3. Merging chapters securely (so offline inputs are never lost)
+          const mergedChaptersMap = new Map<string, Chapter>();
+          if (imported.chapters && imported.chapters.length > 0) {
+            imported.chapters.forEach(ch => {
+              mergedChaptersMap.set(ch.id, ch);
+            });
+          }
+          localChapters.forEach(ch => {
+            const existing = mergedChaptersMap.get(ch.id);
+            if (existing) {
+              const localText = ch.pages.join("");
+              const importedText = existing.pages.join("");
+              if (localText.length > importedText.length) {
+                mergedChaptersMap.set(ch.id, ch);
+              }
+            } else {
+              mergedChaptersMap.set(ch.id, ch);
+            }
+          });
+
+          let mergedChaptersList = Array.from(mergedChaptersMap.values());
+          mergedChaptersList.sort((a, b) => a.number - b.number);
+          
+          const finalChapters = mergedChaptersList.map((ch, idx) => ({
+            ...ch,
+            number: idx + 1,
+            isLocked: true
+          }));
+
+          // 4. Merging reviews securely
+          const mergedReviewsMap = new Map<string, Review>();
+          if (imported.reviews) {
+            imported.reviews.forEach(r => mergedReviewsMap.set(r.id, r));
+          }
+          localReviews.forEach(r => mergedReviewsMap.set(r.id, r));
+          const finalReviews = Array.from(mergedReviewsMap.values()).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+          // 5. Merging bookmarks
+          const mergedBookmarksMap = new Map<string, Bookmark>();
+          if (imported.bookmarks) {
+            imported.bookmarks.forEach(b => mergedBookmarksMap.set(b.chapterId, b));
+          }
+          localBookmarks.forEach(b => mergedBookmarksMap.set(b.chapterId, b));
+          const finalBookmarks = Array.from(mergedBookmarksMap.values());
+
+          // 6. Save back merged database locally
+          setChapters(finalChapters);
+          localStorage.setItem(STORAGE_CHAPTERS_KEY, JSON.stringify(finalChapters));
+          setReviews(finalReviews);
+          localStorage.setItem(STORAGE_REVIEWS, JSON.stringify(finalReviews));
+          setBookmarks(finalBookmarks);
+          localStorage.setItem(STORAGE_BOOKMARKS, JSON.stringify(finalBookmarks));
+
+          // 7. Write fully merged database immediately to Google Sheets
+          await exportToGoogleSheets(googleToken, finalChapters, finalReviews, finalBookmarks);
+
+          const nowStr = new Date().toLocaleString("id-ID");
+          setLastSyncTime(nowStr);
+          localStorage.setItem("bumimina_last_sheets_sync_v1", nowStr);
+          showToast("Sinkronisasi Otomatis: Data novel berhasil dimuat & disinkronkan ke Google Sheets!", "success");
         } catch (err: any) {
-          console.error("Gagal memuat otomatis dari Google Sheets:", err);
-          showToast("Sinkronisasi otomatis gagal: " + err.message, "error");
+          console.error("Gagal memuat/sinkronisasi otomatis dari Google Sheets:", err);
+          if (err.message === "TOKEN_EXPIRED") {
+            setGoogleUser(null);
+            setGoogleToken(null);
+            localStorage.removeItem("bumimina_google_token_v1");
+            localStorage.removeItem("bumimina_google_token_expiry_v1");
+            showToast("Koneksi Google Sheets kedaluwarsa. Silakan masuk kembali di Dashboard Admin untuk memulihkan sinkronisasi.", "info");
+          } else {
+            showToast("Sinkronisasi otomatis gagal: " + err.message, "error");
+          }
         } finally {
           setIsSyncingSheets(false);
         }
       };
 
-      autoLoadFromSheets();
+      autoLoadAndMergeFromSheets();
     }
   }, [googleToken]);
 
@@ -518,7 +595,15 @@ export default function App() {
         showToast("Otomatis tersimpan ke Google Sheets!", "success");
       } catch (err: any) {
         console.error("Gagal sinkronisasi otomatis ke Google Sheets:", err);
-        showToast("Gagal menyimpan otomatis ke Sheets: " + err.message, "error");
+        if (err.message === "TOKEN_EXPIRED") {
+          setGoogleUser(null);
+          setGoogleToken(null);
+          localStorage.removeItem("bumimina_google_token_v1");
+          localStorage.removeItem("bumimina_google_token_expiry_v1");
+          showToast("Sesi Google Sheets kedaluwarsa. Silakan masuk kembali di Dashboard Admin.", "info");
+        } else {
+          showToast("Gagal menyimpan otomatis ke Sheets: " + err.message, "error");
+        }
       }
     }
   };
@@ -579,7 +664,15 @@ export default function App() {
       showToast("Seluruh database isi novel berhasil disimpan ke Google Sheets!", "success");
     } catch (err: any) {
       console.error(err);
-      showToast("Ekspor gagal: " + err.message, "error");
+      if (err.message === "TOKEN_EXPIRED") {
+        setGoogleUser(null);
+        setGoogleToken(null);
+        localStorage.removeItem("bumimina_google_token_v1");
+        localStorage.removeItem("bumimina_google_token_expiry_v1");
+        showToast("Sesi Google Sheets kedaluwarsa. Silakan masuk kembali di Dashboard Admin.", "error");
+      } else {
+        showToast("Ekspor gagal: " + err.message, "error");
+      }
     } finally {
       setIsSyncingSheets(false);
     }
@@ -591,7 +684,7 @@ export default function App() {
       return;
     }
     const confirmed = window.confirm(
-      "Apakah Anda yakin ingin memuat data novel dari Google Sheets? Tindakan ini akan menggantikan seluruh data lokal (bab, ulasan, bookmark) di peramban Anda dengan data dari spreadsheet."
+      "Apakah Anda yakin ingin memuat data novel dari Google Sheets? Tindakan ini akan menggantikan seluruh draf lokal di peramban Anda dengan data dari spreadsheet."
     );
     if (!confirmed) return;
 
@@ -614,7 +707,15 @@ export default function App() {
       }
     } catch (err: any) {
       console.error(err);
-      showToast("Impor gagal: " + err.message, "error");
+      if (err.message === "TOKEN_EXPIRED") {
+        setGoogleUser(null);
+        setGoogleToken(null);
+        localStorage.removeItem("bumimina_google_token_v1");
+        localStorage.removeItem("bumimina_google_token_expiry_v1");
+        showToast("Sesi Google Sheets kedaluwarsa. Silakan masuk kembali di Dashboard Admin.", "error");
+      } else {
+        showToast("Impor gagal: " + err.message, "error");
+      }
     } finally {
       setIsSyncingSheets(false);
     }
